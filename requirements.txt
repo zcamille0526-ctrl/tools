@@ -1,2 +1,2 @@
-pdfplumber
-openpyxl
+pdfplumber 从电子扫描件提取文字
+openpyxl Python 操作 Excel (.xlsx) 文件的库，用它来生成知识点梳理的 Excel 报告
