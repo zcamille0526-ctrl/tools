@@ -4,7 +4,7 @@
 教材知识点梳理与旧库去重工具 v2.0
 ==================================
 使用方式：python3 app.py
-然后浏览器打开 http://localhost:8686
+然后浏览器打开 http://localhost:8788
 """
 
 import os
@@ -26,7 +26,7 @@ from difflib import SequenceMatcher
 # ============================================================
 # 配置
 # ============================================================
-PORT = 8686
+PORT = 8788
 BASE_DIR = Path(__file__).parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 OUTPUT_DIR = BASE_DIR / "outputs"
@@ -36,10 +36,10 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 # ============================================================
 # 百度OCR配置（扫描版PDF专用）
 # ============================================================
-BAIDU_APP_ID     = "122411799"
-BAIDU_API_KEY    = "tShoflxPjqFfUdQI0xjuTQuo"
-BAIDU_SECRET_KEY = "kCWeOSxvxueIIShFwWDUy5xLzR3KlgEA"  # ⚠️ 请替换为重置后的新Key
-POPPLER_PATH     = r"D:\poppler\Library\bin"
+BAIDU_APP_ID     = os.environ.get("BAIDU_APP_ID", "122411799")
+BAIDU_API_KEY    = os.environ.get("BAIDU_API_KEY", "tShoflxPjqFfUdQI0xjuTQuo")
+BAIDU_SECRET_KEY = os.environ.get("BAIDU_SECRET_KEY", "kCWeOSxvxueIIShFwWDUy5xLzR3KlgEA")  # ⚠️ 建议通过环境变量设置，勿提交到版本控制
+POPPLER_PATH     = os.environ.get("POPPLER_PATH", r"D:\poppler\Library\bin")
 
 # ============================================================
 # PDF文本提取（自动识别电子版/扫描版）
@@ -135,7 +135,8 @@ def parse_toc_entries(pages_dict):
             for next_p in range(pnum + 1, pnum + 4):
                 if next_p in pages_dict:
                     next_text = pages_dict[next_p]
-                    if re.search(r"…+\s*\d+", next_text):
+                    # 支持有省略号或无省略号的目录格式
+                    if re.search(r"(…+\s*\d+|第[一二三四五六七八九十百]+[章节]\s+.+?\s+\d+)", next_text):
                         toc_pages_text += next_text + "\n"
                     else:
                         break
@@ -146,11 +147,42 @@ def parse_toc_entries(pages_dict):
 
     entries = []
     current_chapter = ""
+    pending_theme_title = None  # 用于处理"主题探究"后续行
 
     for line in toc_pages_text.split("\n"):
         line = line.strip()
         if not line:
             continue
+
+        # 处理"主题探究"后续行（带页码的标题）
+        if pending_theme_title:
+            # 从行尾提取页码
+            page_num_match = re.search(r'(\d+)\s*$', line)
+            if page_num_match:
+                page_num = int(page_num_match.group(1))
+                # 截掉页码及前面的省略号/空格，得到标题
+                raw = line[:page_num_match.start()].strip()
+                raw = re.sub(r'[…\s]+$', '', raw)  # 去除尾部省略号
+                clean_title = re.sub(r'["""\']', '', raw).strip()  # 去除各类引号
+                if clean_title:
+                    entries.append({
+                        "type": "section",
+                        "chapter": current_chapter,
+                        "section": f"主题探究 {clean_title}",
+                        "title": clean_title,
+                        "page": page_num,
+                    })
+                pending_theme_title = None
+                continue
+            else:
+                pending_theme_title = None
+
+        # 匹配"主题探究"（单独一行，无页码）
+        if line == "主题探究":
+            pending_theme_title = True
+            continue
+
+        # === 有省略号的格式（原有逻辑） ===
 
         # 匹配简单数字章节（一、二、三...）
         simple_ch_match = re.search(r"^([一二三四五六七八九十]+)[、\s]+(.+?)…+\s*(\d+)", line)
@@ -166,12 +198,10 @@ def parse_toc_entries(pages_dict):
             continue
 
         # 匹配无数字前缀的章节（如"年、月、日的奥秘"）
-        # 必须在行首，不以数字或"第"开头，包含省略号和页码
         no_prefix_match = re.search(r"^([^一二三四五六七八九十第\d\s].{2,30}?)…+\s*(\d+)$", line)
         if no_prefix_match:
             title = no_prefix_match.group(1).strip()
-            # 排除小节标题（通常以数字开头如"1."或"2."）
-            if not re.match(r"^\d+[\.、]", title) and len(entries) < 15:  # 限制章节数量避免误匹配
+            if not re.match(r"^\d+[\.、]", title) and len(entries) < 15:
                 current_chapter = title
                 entries.append({
                     "type": "chapter",
@@ -182,7 +212,7 @@ def parse_toc_entries(pages_dict):
                 })
                 continue
 
-        # 匹配章标题
+        # 匹配章标题（有省略号）
         ch_match = re.search(r"(第[一二三四五六七八九十百]+章)\s+(.+?)…+\s*(\d+)", line)
         if ch_match:
             current_chapter = f"{ch_match.group(1)} {ch_match.group(2).strip()}"
@@ -195,7 +225,7 @@ def parse_toc_entries(pages_dict):
             })
             continue
 
-        # 匹配单元标题（历史等）
+        # 匹配单元标题（有省略号）
         unit_match = re.search(r"(第[一二三四五六七八九十百]+单元)\s+(.+?)…+\s*(\d+)", line)
         if unit_match:
             current_chapter = f"{unit_match.group(1)} {unit_match.group(2).strip()}"
@@ -208,7 +238,7 @@ def parse_toc_entries(pages_dict):
             })
             continue
 
-        # 匹配节标题
+        # 匹配节标题（有省略号）
         sec_match = re.search(r"(第[一二三四五六七八九十百]+节)\s*(.+?)…+\s*(\d+)", line)
         if sec_match:
             section_name = f"{sec_match.group(1)} {sec_match.group(2).strip()}"
@@ -221,11 +251,10 @@ def parse_toc_entries(pages_dict):
             })
             continue
 
-        # 匹配课标题（历史等）
+        # 匹配课标题（有省略号）
         lesson_match = re.search(r"(第\s*\d+\s*课)\s*(.+?)…+\s*(\d+)", line)
         if lesson_match:
             lesson_title = lesson_match.group(2).strip()
-            # 活动课标记为跳过
             if "活动课" in lesson_match.group(0) or "活动课" in lesson_title:
                 entries.append({
                     "type": "skip",
@@ -245,7 +274,72 @@ def parse_toc_entries(pages_dict):
             })
             continue
 
-        # 匹配跳过项（跨学科、附录、学史方法等）
+        # === 无省略号的格式（新增逻辑） ===
+
+        # 匹配章标题（无省略号，空格分隔）
+        ch_match_no_dot = re.search(r"^(第[一二三四五六七八九十百]+章)\s+(.+?)\s+(\d+)$", line)
+        if ch_match_no_dot:
+            current_chapter = f"{ch_match_no_dot.group(1)} {ch_match_no_dot.group(2).strip()}"
+            entries.append({
+                "type": "chapter",
+                "chapter": current_chapter,
+                "section": "",
+                "title": ch_match_no_dot.group(2).strip(),
+                "page": int(ch_match_no_dot.group(3)),
+            })
+            continue
+
+        # 匹配节标题（无省略号，空格分隔）
+        sec_match_no_dot = re.search(r"^(第[一二三四五六七八九十百]+节)\s+(.+?)\s+(\d+)$", line)
+        if sec_match_no_dot:
+            section_name = f"{sec_match_no_dot.group(1)} {sec_match_no_dot.group(2).strip()}"
+            entries.append({
+                "type": "section",
+                "chapter": current_chapter,
+                "section": section_name,
+                "title": sec_match_no_dot.group(2).strip(),
+                "page": int(sec_match_no_dot.group(3)),
+            })
+            continue
+
+        # 匹配单元标题（无省略号）
+        unit_match_no_dot = re.search(r"^(第[一二三四五六七八九十百]+单元)\s+(.+?)\s+(\d+)$", line)
+        if unit_match_no_dot:
+            current_chapter = f"{unit_match_no_dot.group(1)} {unit_match_no_dot.group(2).strip()}"
+            entries.append({
+                "type": "chapter",
+                "chapter": current_chapter,
+                "section": "",
+                "title": unit_match_no_dot.group(2).strip(),
+                "page": int(unit_match_no_dot.group(3)),
+            })
+            continue
+
+        # 匹配课标题（无省略号）
+        lesson_match_no_dot = re.search(r"^(第\s*\d+\s*课)\s+(.+?)\s+(\d+)$", line)
+        if lesson_match_no_dot:
+            lesson_title = lesson_match_no_dot.group(2).strip()
+            # 活动课标记为跳过
+            if "活动课" in lesson_match_no_dot.group(0) or "活动课" in lesson_title:
+                entries.append({
+                    "type": "skip",
+                    "chapter": current_chapter,
+                    "section": f"{lesson_match_no_dot.group(1).replace(' ','')} {lesson_title}",
+                    "title": lesson_title,
+                    "page": int(lesson_match_no_dot.group(3)),
+                })
+                continue
+            section_name = f"{lesson_match_no_dot.group(1).replace(' ','')} {lesson_title}"
+            entries.append({
+                "type": "section",
+                "chapter": current_chapter,
+                "section": section_name,
+                "title": lesson_title,
+                "page": int(lesson_match_no_dot.group(3)),
+            })
+            continue
+
+        # 匹配跳过项（有省略号）
         skip_match = re.search(r"(【.+?】|跨学科|附录|本书常用|学史方法|活动课|大事年表).+?…+\s*(\d+)", line)
         if skip_match:
             entries.append({
@@ -331,6 +425,7 @@ def split_pages_by_regex(pages_dict):
     current_chapter = ""
     current_section = ""
     current_text = ""
+    chapter_counter = 0  # 用于生成chapter_order
 
     skip_keywords = ["跨学科主题学习", "附录", "本书常用地图图例", "活动课", "学史方法", "大事年表"]
 
@@ -342,45 +437,69 @@ def split_pages_by_regex(pages_dict):
         should_skip = any(kw in text[:150] for kw in skip_keywords)
         if should_skip:
             if current_text.strip():
-                chunks.append({"chapter": current_chapter, "section": current_section,
-                               "info": f"{current_chapter} {current_section}".strip(),
-                               "text": current_text})
+                chunks.append({
+                    "chapter": current_chapter,
+                    "section": current_section,
+                    "chapter_order": chapter_counter,
+                    "info": f"{current_chapter} {current_section}".strip(),
+                    "text": current_text
+                })
                 current_text = ""
             continue
 
+        # 匹配多种章节格式
         ch = re.search(r"(第[一二三四五六七八九十百]+章)\s+(.+?)(?:\n|$)", text)
+        simple_ch = re.search(r"^([一二三四五六七八九十]+)[、\s]+(.{2,30}?)(?:\n|$)", text, re.MULTILINE)
         sec = re.search(r"(第[一二三四五六七八九十百]+节)\s*(.+?)(?:\n|$)", text)
         lesson = re.search(r"(第\s*\d+\s*课)\s*(.+?)(?:\n|$)", text)
         unit = re.search(r"(第[一二三四五六七八九十百]+单元)\s+(.+?)(?:\n|$)", text)
 
         if sec or lesson:
             if current_text.strip():
-                chunks.append({"chapter": current_chapter, "section": current_section,
-                               "info": f"{current_chapter} {current_section}".strip(),
-                               "text": current_text})
+                chunks.append({
+                    "chapter": current_chapter,
+                    "section": current_section,
+                    "chapter_order": chapter_counter,
+                    "info": f"{current_chapter} {current_section}".strip(),
+                    "text": current_text
+                })
             if ch:
                 current_chapter = f"{ch.group(1)} {ch.group(2).strip()}"
             elif unit:
                 current_chapter = f"{unit.group(1)} {unit.group(2).strip()}"
+            elif simple_ch:
+                current_chapter = f"{simple_ch.group(1)} {simple_ch.group(2).strip()}"
             m = sec or lesson
             current_section = f"{m.group(1).replace(' ','')} {m.group(2).strip()}"
             current_text = text
-        elif ch or unit:
+        elif ch or unit or simple_ch:
             if current_text.strip():
-                chunks.append({"chapter": current_chapter, "section": current_section,
-                               "info": f"{current_chapter} {current_section}".strip(),
-                               "text": current_text})
-            m = ch or unit
-            current_chapter = f"{m.group(1)} {m.group(2).strip()}"
+                chunks.append({
+                    "chapter": current_chapter,
+                    "section": current_section,
+                    "chapter_order": chapter_counter,
+                    "info": f"{current_chapter} {current_section}".strip(),
+                    "text": current_text
+                })
+            m = ch or unit or simple_ch
+            if simple_ch:
+                current_chapter = f"{simple_ch.group(1)} {simple_ch.group(2).strip()}"
+            else:
+                current_chapter = f"{m.group(1)} {m.group(2).strip()}"
             current_section = ""
             current_text = text
+            chapter_counter += 1  # 新章节，计数器+1
         else:
             current_text += "\n" + text
 
     if current_text.strip():
-        chunks.append({"chapter": current_chapter, "section": current_section,
-                       "info": f"{current_chapter} {current_section}".strip(),
-                       "text": current_text})
+        chunks.append({
+            "chapter": current_chapter,
+            "section": current_section,
+            "chapter_order": chapter_counter,
+            "info": f"{current_chapter} {current_section}".strip(),
+            "text": current_text
+        })
 
     return [c for c in chunks if len(c["text"].strip()) > 80]
 
@@ -946,6 +1065,7 @@ def call_llm_api(api_config, user_prompt, system_prompt=None, max_retries=3):
     last_error = None
     for attempt in range(max_retries):
         try:
+            import urllib.error
             req = urllib.request.Request(url, data=data, headers=headers, method="POST")
             with urllib.request.urlopen(req, timeout=300) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
@@ -976,6 +1096,37 @@ def call_llm_api(api_config, user_prompt, system_prompt=None, max_retries=3):
                 elif "result" in result:
                     return result["result"]
                 return ""
+
+        except urllib.error.HTTPError as e:
+            # 对不同HTTP错误码提供明确的诊断信息
+            error_body = ""
+            try:
+                error_body = e.read().decode('utf-8', errors='ignore')[:300]
+            except:
+                pass
+
+            if e.code == 404:
+                # 404 不应该重试，直接给出诊断
+                if "ark.cn-beijing.volces.com" in url or "ark.cn-shanghai.volces.com" in url or "volces.com" in url:
+                    raise ValueError(
+                        f"❌ 豆包接入点不存在(HTTP 404)。请检查：\n"
+                        f"   1. 接入点ID是否正确（Volcengine控制台 → 方舟 → 推理接入点）\n"
+                        f"   2. 接入点所在地域是否与URL地域一致（cn-beijing vs cn-shanghai）\n"
+                        f"   3. 该接入点是否被删除或已过期\n"
+                        f"   4. API Key是否属于同一账号\n"
+                        f"服务器返回: {error_body}"
+                    )
+                else:
+                    raise ValueError(f"API端点不存在(HTTP 404)。请检查API地址和模型名称是否正确。详情: {error_body}")
+            elif e.code == 401:
+                raise ValueError(f"❌ API Key无效(HTTP 401)。请检查API Key是否正确填写，或是否已过期")
+            elif e.code == 403:
+                raise ValueError(f"❌ API访问被拒绝(HTTP 403)。请检查API Key的权限或账户是否有可用额度")
+
+            # 其他HTTP错误，等待重试
+            last_error = e
+            if attempt < max_retries - 1:
+                time.sleep((attempt + 1) * 3)
 
         except Exception as e:
             last_error = e
@@ -1085,8 +1236,11 @@ def process_textbook(task_id, pdf_path, kb_path, ref_path, subject, api_config, 
         total_chars = sum(len(t) for t in pages.values())
         log_fn(f"  共 {len(pages)} 页，{total_chars:,} 字符", "success")
 
-        if total_chars < 100:
-            log_fn("❌ PDF几乎没有文字，可能是扫描件。", "error")
+        if total_chars < 500:
+            log_fn(f"❌ PDF提取文字过少({total_chars}字/共{len(pages)}页)。可能原因：", "error")
+            log_fn("   1. 这是扫描版PDF（图片扫描，非电子文字）", "error")
+            log_fn("   2. 请确认PDF可以在PDF阅读器中复制文字", "error")
+            log_fn("   3. 如需处理扫描版，需先用OCR工具转换", "error")
             return None
 
         # Step 2: 章节分割

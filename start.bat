@@ -45,15 +45,28 @@ if errorlevel 1 (
     echo  [OK] Dependencies installed
 )
 
+:: ---- Check optional OCR dependencies ----
+%PYTHON% -c "import aip, pdf2image, PIL" >nul 2>&1
+if errorlevel 1 (
+    echo  [INFO] OCR dependencies not found (baidu-aip, pdf2image, Pillow)
+    echo  [INFO] Scanned PDF support will be disabled.
+    echo  [INFO] To enable, run: pip install baidu-aip pdf2image Pillow
+)
+
 :: ---- Start server ----
 echo.
 echo  [START] Launching server...
-echo  Browser will open: http://localhost:8686
+echo  Browser will open: http://localhost:8788
 echo.
 
 cd /d "%~dp0"
 
-start "" cmd /c "timeout /t 2 /nobreak >nul && start http://localhost:8686"
+start /min "" cmd /c "timeout /t 2 /nobreak >nul && start http://localhost:8788"
 
 %PYTHON% app.py
+if errorlevel 1 (
+    echo.
+    echo  [ERROR] Server exited unexpectedly!
+    echo  Please check the error message above.
+)
 pause
