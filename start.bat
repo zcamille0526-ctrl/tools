@@ -31,14 +31,14 @@ echo  [OK] Python found:
 %PYTHON% --version
 
 :: ---- Check dependencies ----
-%PYTHON% -c "import pdfplumber, openpyxl" >nul 2>&1
+%PYTHON% -c "import pdfplumber, openpyxl, multipart" >nul 2>&1
 if errorlevel 1 (
     echo.
     echo  [INFO] First run - installing dependencies...
-    %PYTHON% -m pip install pdfplumber openpyxl -q
+    %PYTHON% -m pip install pdfplumber openpyxl multipart -q
     if errorlevel 1 (
         echo  [ERROR] Install failed. Please run manually:
-        echo    pip install pdfplumber openpyxl
+        echo    pip install pdfplumber openpyxl multipart
         pause
         exit /b 1
     )

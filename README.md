@@ -106,6 +106,7 @@ A: 上传一份已整理好的"参考表格"，AI会模仿它的颗粒度。
 textbook-tool/
 ├── start.bat        ← 双击这个启动
 ├── app.py           ← 程序主文件（不用管）
+├── index.html       ← 前端页面（不用管）
 ├── README.md        ← 你正在看的说明
 ├── uploads/         ← 上传的文件临时存放
 └── outputs/         ← 生成的Excel在这里

@@ -125,6 +125,18 @@ def extract_pdf_text(pdf_path):
 # ============================================================
 # 目录解析与章节分割（改进版）
 # ============================================================
+def _match_toc_entry(line, prefix_pattern):
+    """匹配目录行，同时支持省略号格式（第X章 标题…3）和空格格式（第X章 标题 3）
+    返回 (prefix, title, page) 或 None"""
+    m = re.search(rf"({prefix_pattern})\s*(.+?)…+\s*(\d+)", line)
+    if m:
+        return m.group(1), m.group(2).strip(), int(m.group(3))
+    m = re.search(rf"^({prefix_pattern})\s+(.+?)\s+(\d+)$", line)
+    if m:
+        return m.group(1), m.group(2).strip(), int(m.group(3))
+    return None
+
+
 def parse_toc_entries(pages_dict):
     """从PDF页面中解析目录，返回结构化的目录条目列表"""
     toc_pages_text = ""
@@ -212,134 +224,39 @@ def parse_toc_entries(pages_dict):
                 })
                 continue
 
-        # 匹配章标题（有省略号）
-        ch_match = re.search(r"(第[一二三四五六七八九十百]+章)\s+(.+?)…+\s*(\d+)", line)
-        if ch_match:
-            current_chapter = f"{ch_match.group(1)} {ch_match.group(2).strip()}"
-            entries.append({
-                "type": "chapter",
-                "chapter": current_chapter,
-                "section": "",
-                "title": ch_match.group(2).strip(),
-                "page": int(ch_match.group(3)),
-            })
+        # 章标题（省略号/空格两种格式统一处理）
+        m = _match_toc_entry(line, r"第[一二三四五六七八九十百]+章")
+        if m:
+            prefix, title, page = m
+            current_chapter = f"{prefix} {title}"
+            entries.append({"type": "chapter", "chapter": current_chapter, "section": "", "title": title, "page": page})
             continue
 
-        # 匹配单元标题（有省略号）
-        unit_match = re.search(r"(第[一二三四五六七八九十百]+单元)\s+(.+?)…+\s*(\d+)", line)
-        if unit_match:
-            current_chapter = f"{unit_match.group(1)} {unit_match.group(2).strip()}"
-            entries.append({
-                "type": "chapter",
-                "chapter": current_chapter,
-                "section": "",
-                "title": unit_match.group(2).strip(),
-                "page": int(unit_match.group(3)),
-            })
+        # 单元标题
+        m = _match_toc_entry(line, r"第[一二三四五六七八九十百]+单元")
+        if m:
+            prefix, title, page = m
+            current_chapter = f"{prefix} {title}"
+            entries.append({"type": "chapter", "chapter": current_chapter, "section": "", "title": title, "page": page})
             continue
 
-        # 匹配节标题（有省略号）
-        sec_match = re.search(r"(第[一二三四五六七八九十百]+节)\s*(.+?)…+\s*(\d+)", line)
-        if sec_match:
-            section_name = f"{sec_match.group(1)} {sec_match.group(2).strip()}"
-            entries.append({
-                "type": "section",
-                "chapter": current_chapter,
-                "section": section_name,
-                "title": sec_match.group(2).strip(),
-                "page": int(sec_match.group(3)),
-            })
+        # 节标题
+        m = _match_toc_entry(line, r"第[一二三四五六七八九十百]+节")
+        if m:
+            prefix, title, page = m
+            entries.append({"type": "section", "chapter": current_chapter, "section": f"{prefix} {title}", "title": title, "page": page})
             continue
 
-        # 匹配课标题（有省略号）
-        lesson_match = re.search(r"(第\s*\d+\s*课)\s*(.+?)…+\s*(\d+)", line)
-        if lesson_match:
-            lesson_title = lesson_match.group(2).strip()
-            if "活动课" in lesson_match.group(0) or "活动课" in lesson_title:
-                entries.append({
-                    "type": "skip",
-                    "chapter": current_chapter,
-                    "section": f"{lesson_match.group(1).replace(' ','')} {lesson_title}",
-                    "title": lesson_title,
-                    "page": int(lesson_match.group(3)),
-                })
-                continue
-            section_name = f"{lesson_match.group(1).replace(' ','')} {lesson_title}"
-            entries.append({
-                "type": "section",
-                "chapter": current_chapter,
-                "section": section_name,
-                "title": lesson_title,
-                "page": int(lesson_match.group(3)),
-            })
+        # 课标题（含活动课识别）
+        m = _match_toc_entry(line, r"第\s*\d+\s*课")
+        if m:
+            prefix, title, page = m
+            section_name = f"{prefix.replace(' ', '')} {title}"
+            is_activity = "活动课" in prefix or "活动课" in title
+            entries.append({"type": "skip" if is_activity else "section", "chapter": current_chapter, "section": section_name, "title": title, "page": page})
             continue
 
-        # === 无省略号的格式（新增逻辑） ===
-
-        # 匹配章标题（无省略号，空格分隔）
-        ch_match_no_dot = re.search(r"^(第[一二三四五六七八九十百]+章)\s+(.+?)\s+(\d+)$", line)
-        if ch_match_no_dot:
-            current_chapter = f"{ch_match_no_dot.group(1)} {ch_match_no_dot.group(2).strip()}"
-            entries.append({
-                "type": "chapter",
-                "chapter": current_chapter,
-                "section": "",
-                "title": ch_match_no_dot.group(2).strip(),
-                "page": int(ch_match_no_dot.group(3)),
-            })
-            continue
-
-        # 匹配节标题（无省略号，空格分隔）
-        sec_match_no_dot = re.search(r"^(第[一二三四五六七八九十百]+节)\s+(.+?)\s+(\d+)$", line)
-        if sec_match_no_dot:
-            section_name = f"{sec_match_no_dot.group(1)} {sec_match_no_dot.group(2).strip()}"
-            entries.append({
-                "type": "section",
-                "chapter": current_chapter,
-                "section": section_name,
-                "title": sec_match_no_dot.group(2).strip(),
-                "page": int(sec_match_no_dot.group(3)),
-            })
-            continue
-
-        # 匹配单元标题（无省略号）
-        unit_match_no_dot = re.search(r"^(第[一二三四五六七八九十百]+单元)\s+(.+?)\s+(\d+)$", line)
-        if unit_match_no_dot:
-            current_chapter = f"{unit_match_no_dot.group(1)} {unit_match_no_dot.group(2).strip()}"
-            entries.append({
-                "type": "chapter",
-                "chapter": current_chapter,
-                "section": "",
-                "title": unit_match_no_dot.group(2).strip(),
-                "page": int(unit_match_no_dot.group(3)),
-            })
-            continue
-
-        # 匹配课标题（无省略号）
-        lesson_match_no_dot = re.search(r"^(第\s*\d+\s*课)\s+(.+?)\s+(\d+)$", line)
-        if lesson_match_no_dot:
-            lesson_title = lesson_match_no_dot.group(2).strip()
-            # 活动课标记为跳过
-            if "活动课" in lesson_match_no_dot.group(0) or "活动课" in lesson_title:
-                entries.append({
-                    "type": "skip",
-                    "chapter": current_chapter,
-                    "section": f"{lesson_match_no_dot.group(1).replace(' ','')} {lesson_title}",
-                    "title": lesson_title,
-                    "page": int(lesson_match_no_dot.group(3)),
-                })
-                continue
-            section_name = f"{lesson_match_no_dot.group(1).replace(' ','')} {lesson_title}"
-            entries.append({
-                "type": "section",
-                "chapter": current_chapter,
-                "section": section_name,
-                "title": lesson_title,
-                "page": int(lesson_match_no_dot.group(3)),
-            })
-            continue
-
-        # 匹配跳过项（有省略号）
+        # 跳过项（有省略号）
         skip_match = re.search(r"(【.+?】|跨学科|附录|本书常用|学史方法|活动课|大事年表).+?…+\s*(\d+)", line)
         if skip_match:
             entries.append({
@@ -507,38 +424,43 @@ def split_pages_by_regex(pages_dict):
 # ============================================================
 # Excel解析
 # ============================================================
-def parse_old_kb(xlsx_path):
-    """解析旧库Excel"""
+def _open_xlsx(xlsx_path):
+    """打开Excel，返回 (workbook, worksheet, col_map)"""
     import openpyxl
     wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
     ws = wb[wb.sheetnames[0]]
-
     headers = []
     for row in ws.iter_rows(min_row=1, max_row=1, values_only=True):
         headers = [str(c).strip() if c else "" for c in row]
         break
-
     col_map = {h: i for i, h in enumerate(headers)}
+    return wb, ws, col_map
+
+def _get_cell(vals, col_map, *names, default=""):
+    """按多个候选列名取单元格值，返回第一个非空的"""
+    for name in names:
+        idx = col_map.get(name)
+        if idx is not None and idx < len(vals) and vals[idx] is not None:
+            return str(vals[idx]).strip()
+    return default
+
+
+def parse_old_kb(xlsx_path):
+    """解析旧库Excel"""
+    wb, ws, col_map = _open_xlsx(xlsx_path)
 
     records = []
     for row in ws.iter_rows(min_row=2, values_only=True):
         vals = list(row)
         if not vals or all(v is None for v in vals):
             continue
+        g = lambda *names: _get_cell(vals, col_map, *names)
 
-        def get(name, default=""):
-            idx = col_map.get(name)
-            if idx is not None and idx < len(vals) and vals[idx] is not None:
-                return str(vals[idx]).strip()
-            return default
-
-        subject_raw = get("subjectInner") or get("学科") or get("subject") or ""
-        kid = get("知识点Kid") or get("一级知识点id") or get("Kid") or ""
-        kname = get("知识点名称") or get("一级知识点") or ""
-        sub_title = get("二级知识点标题") or ""
-        sub_detail = get("二级知识点详情") or ""
-        chapter = get("篇章名称") or get("章") or ""
-        section = get("模块名称") or get("节") or ""
+        subject_raw = g("subjectInner", "学科", "subject")
+        kid    = g("知识点Kid", "一级知识点id", "Kid")
+        kname  = g("知识点名称", "一级知识点")
+        sub_title  = g("二级知识点标题")
+        sub_detail = g("二级知识点详情")
 
         if not sub_title and not kname:
             continue
@@ -551,12 +473,12 @@ def parse_old_kb(xlsx_path):
             "sub_title": sub_title,
             "sub_detail": clean_detail,
             "sub_detail_short": clean_detail[:150],
-            "chapter": chapter,
-            "section": section,
-            "period": get("学段") or "",
-            "grade": get("年级") or "",
-            "publisher": get("出版社") or "",
-            "volume": get("volume") or get("册") or "",
+            "chapter": g("篇章名称", "章"),
+            "section": g("模块名称", "节"),
+            "period": g("学段"),
+            "grade": g("年级"),
+            "publisher": g("出版社"),
+            "volume": g("volume", "册"),
         })
 
     wb.close()
@@ -565,39 +487,24 @@ def parse_old_kb(xlsx_path):
 
 def parse_ref_table(xlsx_path):
     """解析参考表格"""
-    import openpyxl
-    wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
-    ws = wb[wb.sheetnames[0]]
+    wb, ws, col_map = _open_xlsx(xlsx_path)
 
-    headers = []
-    for row in ws.iter_rows(min_row=1, max_row=1, values_only=True):
-        headers = [str(c).strip() if c else "" for c in row]
-        break
-
-    col_map = {h: i for i, h in enumerate(headers)}
     samples = []
-
     for row in ws.iter_rows(min_row=2, values_only=True):
         if len(samples) >= 30:
             break
         vals = list(row)
         if not vals or all(v is None for v in vals):
             continue
-
-        def get(name, default=""):
-            idx = col_map.get(name)
-            if idx is not None and idx < len(vals) and vals[idx] is not None:
-                return str(vals[idx]).strip()
-            return default
-
+        g = lambda *names: _get_cell(vals, col_map, *names)
         samples.append({
-            "章": get("章") or get("篇章名称"),
-            "节": get("节") or get("模块名称"),
-            "一级知识点": get("一级知识点") or get("知识点名称"),
-            "一级知识点id": get("一级知识点id") or get("知识点Kid"),
-            "二级知识点标题": get("二级知识点标题"),
-            "二级知识点详情": strip_html(get("二级知识点详情"))[:200],
-            "备注": get("备注"),
+            "章": g("章", "篇章名称"),
+            "节": g("节", "模块名称"),
+            "一级知识点": g("一级知识点", "知识点名称"),
+            "一级知识点id": g("一级知识点id", "知识点Kid"),
+            "二级知识点标题": g("二级知识点标题"),
+            "二级知识点详情": strip_html(g("二级知识点详情"))[:200],
+            "备注": g("备注"),
         })
 
     wb.close()
@@ -606,29 +513,16 @@ def parse_ref_table(xlsx_path):
 
 def detect_subjects_in_kb(xlsx_path):
     """快速扫描旧库中有哪些学科"""
-    import openpyxl
-    wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
-    ws = wb[wb.sheetnames[0]]
-
-    headers = []
-    for row in ws.iter_rows(min_row=1, max_row=1, values_only=True):
-        headers = [str(c).strip() if c else "" for c in row]
-        break
-
-    col_map = {h: i for i, h in enumerate(headers)}
+    wb, ws, col_map = _open_xlsx(xlsx_path)
     subj_idx = col_map.get("subjectInner", col_map.get("学科", col_map.get("subject")))
 
     subjects = {}
-    if subj_idx is None:
-        wb.close()
-        return []
-
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        vals = list(row)
-        if subj_idx < len(vals) and vals[subj_idx]:
-            raw = str(vals[subj_idx]).strip()
-            norm = normalize_subject(raw)
-            subjects[norm] = subjects.get(norm, 0) + 1
+    if subj_idx is not None:
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            vals = list(row)
+            if subj_idx < len(vals) and vals[subj_idx]:
+                norm = normalize_subject(str(vals[subj_idx]).strip())
+                subjects[norm] = subjects.get(norm, 0) + 1
 
     wb.close()
     return sorted(subjects.items(), key=lambda x: -x[1])
@@ -636,23 +530,14 @@ def detect_subjects_in_kb(xlsx_path):
 
 def detect_kb_filters(xlsx_path):
     """扫描旧库中所有可筛选维度：学科、学段、年级、出版社、册"""
-    import openpyxl
-    wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
-    ws = wb[wb.sheetnames[0]]
-
-    headers = []
-    for row in ws.iter_rows(min_row=1, max_row=1, values_only=True):
-        headers = [str(c).strip() if c else "" for c in row]
-        break
-
-    col_map = {h: i for i, h in enumerate(headers)}
+    wb, ws, col_map = _open_xlsx(xlsx_path)
     dims = {"subjects": {}, "periods": {}, "grades": {}, "publishers": {}, "volumes": {}}
     field_map = {
-        "subjects": col_map.get("subjectInner", col_map.get("学科")),
-        "periods": col_map.get("学段"),
-        "grades": col_map.get("年级"),
+        "subjects":   col_map.get("subjectInner", col_map.get("学科")),
+        "periods":    col_map.get("学段"),
+        "grades":     col_map.get("年级"),
         "publishers": col_map.get("出版社"),
-        "volumes": col_map.get("volume", col_map.get("册")),
+        "volumes":    col_map.get("volume", col_map.get("册")),
     }
 
     for row in ws.iter_rows(min_row=2, values_only=True):
@@ -725,8 +610,25 @@ def sanitize_excel_value(val):
     """移除Excel不支持的非法字符（控制字符等）"""
     if not isinstance(val, str):
         return val
-    # 移除控制字符（0x00-0x1F，除了\t\n\r）和其他非法字符
     return re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]', '', val)
+
+def _make_result(point, note, kb=None, confidence=0):
+    """构造标准结果字典，kb为旧库记录（匹配时传入），None表示需新增"""
+    return {
+        "章": point.get("章", ""),
+        "节": point.get("节", ""),
+        "chapter_order": point.get("chapter_order", 0),
+        "一级知识点": (kb["knowledge_name"] if kb else None) or point.get("一级知识点", ""),
+        "一级知识点id": kb["kid"] if kb else "",
+        "二级知识点标题": (kb["sub_title"] if kb else None) or point.get("二级知识点标题", ""),
+        "二级知识点详情": (kb["sub_detail"] if kb else None) or point.get("二级知识点详情", ""),
+        "备注": note,
+        "_confidence": confidence,
+        "_new_title": point.get("二级知识点标题", ""),
+        "_new_detail": point.get("二级知识点详情", ""),
+        "_kb_chapter": kb.get("chapter", "") if kb else "",
+        "_kb_section": kb.get("section", "") if kb else "",
+    }
 
 
 # ============================================================
@@ -825,21 +727,7 @@ def match_with_old_kb(new_points, old_kb_records, api_config=None, log_fn=None, 
                 best_match = kb
 
         if best_score >= threshold and best_match:
-            matched_results.append({
-                "章": point.get("章", ""),
-                "节": point.get("节", ""),
-                "chapter_order": point.get("chapter_order", 0),
-                "一级知识点": best_match["knowledge_name"],
-                "一级知识点id": best_match["kid"],
-                "二级知识点标题": best_match["sub_title"],
-                "二级知识点详情": best_match["sub_detail"],
-                "备注": "已存在，无需新增",
-                "_confidence": round(best_score * 100),
-                "_new_title": point.get("二级知识点标题", ""),
-                "_new_detail": point.get("二级知识点详情", ""),
-                "_kb_chapter": best_match.get("chapter", ""),
-                "_kb_section": best_match.get("section", ""),
-            })
+            matched_results.append(_make_result(point, "已存在，无需新增", kb=best_match, confidence=round(best_score * 100)))
         else:
             point["_best_score"] = round(best_score, 3)
             unmatched.append(point)
@@ -852,21 +740,7 @@ def match_with_old_kb(new_points, old_kb_records, api_config=None, log_fn=None, 
         matched_results.extend(ai_results)
     else:
         for point in unmatched:
-            matched_results.append({
-                "章": point.get("章", ""),
-                "节": point.get("节", ""),
-                "chapter_order": point.get("chapter_order", 0),
-                "一级知识点": point.get("一级知识点", ""),
-                "一级知识点id": "",
-                "二级知识点标题": point.get("二级知识点标题", ""),
-                "二级知识点详情": point.get("二级知识点详情", ""),
-                "备注": "需新增",
-                "_confidence": 0,
-                "_new_title": "",
-                "_new_detail": "",
-                "_kb_chapter": "",
-                "_kb_section": "",
-            })
+            matched_results.append(_make_result(point, "需新增"))
         if unmatched:
             log_fn(f"⏭️ 跳过AI比对，{len(unmatched)} 条标记为需新增")
 
@@ -929,37 +803,16 @@ def ai_semantic_match(unmatched_points, old_kb_records, api_config, log_fn):
             for j, point in enumerate(batch):
                 item = parsed_map.get(j)
                 if item and item.get("matched"):
-                    results.append({
-                        "章": point.get("章", ""),
-                        "节": point.get("节", ""),
-                        "chapter_order": point.get("chapter_order", 0),
-                        "一级知识点": item.get("knowledge_name") or point.get("一级知识点", ""),
-                        "一级知识点id": item.get("kid", ""),
-                        "二级知识点标题": item.get("sub_title") or point.get("二级知识点标题", ""),
-                        "二级知识点详情": strip_html(item.get("sub_detail","")) or point.get("二级知识点详情",""),
-                        "备注": "已存在，无需新增",
-                        "_confidence": -1,
-                        "_new_title": point.get("二级知识点标题", ""),
-                        "_new_detail": point.get("二级知识点详情", ""),
-                        "_kb_chapter": "",
-                        "_kb_section": "",
-                    })
+                    ai_kb = {
+                        "knowledge_name": item.get("knowledge_name") or point.get("一级知识点", ""),
+                        "kid": item.get("kid", ""),
+                        "sub_title": item.get("sub_title") or point.get("二级知识点标题", ""),
+                        "sub_detail": strip_html(item.get("sub_detail", "")) or point.get("二级知识点详情", ""),
+                        "chapter": "", "section": "",
+                    }
+                    results.append(_make_result(point, "已存在，无需新增", kb=ai_kb, confidence=-1))
                 else:
-                    results.append({
-                        "章": point.get("章", ""),
-                        "节": point.get("节", ""),
-                        "chapter_order": point.get("chapter_order", 0),
-                        "一级知识点": point.get("一级知识点", ""),
-                        "一级知识点id": "",
-                        "二级知识点标题": point.get("二级知识点标题", ""),
-                        "二级知识点详情": point.get("二级知识点详情", ""),
-                        "备注": "需新增",
-                        "_confidence": 0,
-                        "_new_title": "",
-                        "_new_detail": "",
-                        "_kb_chapter": "",
-                        "_kb_section": "",
-                    })
+                    results.append(_make_result(point, "需新增"))
 
             ai_match = sum(1 for it in parsed_map.values() if it.get("matched"))
             log_fn(f"  批次 {i//batch_size+1}: {len(batch)}条 → AI匹配{ai_match}条")
@@ -967,21 +820,7 @@ def ai_semantic_match(unmatched_points, old_kb_records, api_config, log_fn):
         except Exception as e:
             log_fn(f"  ⚠️ 批次 {i//batch_size+1} 失败: {str(e)[:80]}", "error")
             for point in batch:
-                results.append({
-                    "章": point.get("章", ""),
-                    "节": point.get("节", ""),
-                    "chapter_order": point.get("chapter_order", 0),
-                    "一级知识点": point.get("一级知识点", ""),
-                    "一级知识点id": "",
-                    "二级知识点标题": point.get("二级知识点标题", ""),
-                    "二级知识点详情": point.get("二级知识点详情", ""),
-                    "备注": "需新增（AI比对失败）",
-                    "_confidence": 0,
-                    "_new_title": "",
-                    "_new_detail": "",
-                    "_kb_chapter": "",
-                    "_kb_section": "",
-                })
+                results.append(_make_result(point, "需新增（AI比对失败）"))
 
     ai_exist = sum(1 for r in results if "已存在" in r.get("备注", ""))
     log_fn(f"✅ 第二轮完成：AI匹配 {ai_exist} 条，需新增 {len(results)-ai_exist} 条", "success")
@@ -1586,7 +1425,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
         if path in ("/", "/index.html"):
-            h = get_frontend_html().encode("utf-8")
+            html_file = BASE_DIR / "index.html"
+            h = html_file.read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(h)))
@@ -1638,33 +1478,28 @@ class Handler(BaseHTTPRequestHandler):
         if "multipart/form-data" not in ct:
             self._json({"error": "需要multipart/form-data"}, 400)
             return
-        boundary = ct.split("boundary=")[-1].strip()
-        body = self._read_body()
+        content_length = int(self.headers.get("Content-Length", 0))
+        max_size = 600 * 1024 * 1024  # 600MB
+        if content_length > max_size:
+            self._json({"error": f"文件太大（{content_length // 1024 // 1024}MB），最大允许600MB"}, 413)
+            return
+        from multipart import parse_options_header, MultipartParser
+        _, params = parse_options_header(ct)
+        boundary = params.get("boundary", "")
+        if not boundary:
+            self._json({"error": "缺少boundary"}, 400)
+            return
 
         files = {}
-        for part in body.split(f"--{boundary}".encode()):
-            if b"Content-Disposition" not in part:
-                continue
-            dm = re.search(rb'name="([^"]+)"', part)
-            fm = re.search(rb'filename="([^"]+)"', part)
-            if not dm:
-                continue
-            field = dm.group(1).decode("utf-8")
-            he = part.find(b"\r\n\r\n")
-            if he == -1:
-                continue
-            data = part[he + 4:]
-            if data.endswith(b"\r\n"):
-                data = data[:-2]
-            if fm:
-                orig = fm.group(1).decode("utf-8")
-                safe = f"{uuid.uuid4().hex[:8]}_{orig}"
+        for part in MultipartParser(self.rfile, boundary, content_length):
+            name = part.name
+            if part.filename:
+                safe = f"{uuid.uuid4().hex[:8]}_{part.filename}"
                 sp = UPLOAD_DIR / safe
-                with open(sp, "wb") as f:
-                    f.write(data)
-                files[field] = {"path": str(sp), "name": orig, "size": len(data)}
+                part.save_as(str(sp))
+                files[name] = {"path": str(sp), "name": part.filename, "size": sp.stat().st_size}
             else:
-                files[field] = data.decode("utf-8")
+                files[name] = part.value
 
         self._json({"files": files})
 
@@ -1729,307 +1564,6 @@ class Handler(BaseHTTPRequestHandler):
         threading.Thread(target=run_task, args=(tid, pp, kp, rp, subj, ac, mc), daemon=True).start()
         self._json({"task_id": tid})
 
-
-# ============================================================
-# 前端HTML
-# ============================================================
-def get_frontend_html():
-    return '''<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>教材知识点梳理工具</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-:root{--bg:#f5f0e8;--s1:#ffffff;--s2:#faf7f2;--bd:#e0d8cc;--bdh:#c8bfb0;--t:#2d2418;--td:#6b5d4f;--tm:#9a8d7f;--ac:#c96442;--gn:#3a8c6e;--yw:#c48a2a;--rd:#c44242;--r:12px}
-body{font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--t);min-height:100vh}
-.wrap{max-width:880px;margin:0 auto;padding:20px 16px 60px}
-h1{text-align:center;font-size:26px;font-weight:700;color:var(--ac);padding:32px 0 6px}
-.sub{text-align:center;color:var(--td);font-size:13px;margin-bottom:28px}
-.steps{display:flex;justify-content:center;gap:6px;margin-bottom:28px}
-.st{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--tm)}.st.on{color:var(--ac)}.st.ok{color:var(--gn)}
-.dot{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;border:2px solid var(--bd);transition:.2s}
-.st.on .dot{border-color:var(--ac);background:rgba(201,100,66,.08);color:var(--ac)}
-.st.ok .dot{border-color:var(--gn);background:rgba(58,140,110,.08);color:var(--gn)}
-.st+.st::before{content:"";width:28px;height:1px;background:var(--bd);margin-right:6px}
-.card{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
-.card-t{font-size:14px;font-weight:600;margin-bottom:14px;display:flex;align-items:center;gap:7px;color:var(--t)}
-.upg{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px}@media(max-width:640px){.upg{grid-template-columns:1fr}}
-.upz{background:var(--s2);border:2px dashed var(--bd);border-radius:var(--r);padding:24px 12px;text-align:center;cursor:pointer;transition:.2s}
-.upz:hover{border-color:var(--bdh);background:#fff}.upz.ok{border-color:var(--gn);border-style:solid;background:rgba(58,140,110,.03)}
-.upz .ic{font-size:28px;margin-bottom:8px}.upz .lb{font-size:13px;font-weight:500;margin-bottom:4px;color:var(--t)}
-.upz .ht{font-size:11px;color:var(--tm)}.upz .fn{font-size:11px;color:var(--gn);background:rgba(58,140,110,.06);padding:4px 8px;border-radius:6px;margin-top:6px;word-break:break-all}
-.fr{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}.fr.f1{grid-template-columns:1fr}
-.fg{display:flex;flex-direction:column;gap:3px}
-.fl{font-size:11px;color:var(--td)}
-.fi{background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:9px 11px;color:var(--t);font-size:13px;font-family:inherit;outline:0;transition:.2s;width:100%}
-.fi:focus{border-color:var(--ac);box-shadow:0 0 0 2px rgba(201,100,66,.1)}.fi::placeholder{color:var(--tm)}
-.pre{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
-.pb{padding:5px 12px;border-radius:18px;border:1px solid var(--bd);background:var(--s2);color:var(--td);font-size:12px;cursor:pointer;transition:.2s;font-family:inherit}
-.pb:hover{border-color:var(--ac);color:var(--ac)}.pb.on{border-color:var(--ac);background:rgba(201,100,66,.08);color:var(--ac)}
-.btns{display:flex;justify-content:center;gap:10px;margin:20px 0}
-.btn{padding:10px 28px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;border:0;transition:.2s;font-family:inherit}
-.btn:disabled{opacity:.35;cursor:not-allowed}
-.bp{background:var(--ac);color:#fff}.bp:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 4px 16px rgba(201,100,66,.25);background:#b85838}
-.bs{background:var(--s2);color:var(--t);border:1px solid var(--bd)}
-.bg{background:var(--gn);color:#fff}
-.pbar{width:100%;height:5px;background:var(--bg);border-radius:3px;overflow:hidden;margin-bottom:6px}
-.pfill{height:100%;background:linear-gradient(90deg,var(--ac),#d4845a);border-radius:3px;transition:width .4s}
-.ptxt{font-size:12px;color:var(--td);text-align:center}
-.logs{background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:10px;max-height:300px;overflow-y:auto;font-family:Menlo,Consolas,"Courier New",monospace;font-size:11px;line-height:1.8}
-.logs::-webkit-scrollbar{width:3px}.logs::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px}
-.le{display:flex;gap:8px}.lt{color:var(--tm);flex-shrink:0}
-.le.info .lm{color:var(--td)}.le.success .lm{color:var(--gn)}.le.warn .lm{color:var(--yw)}.le.error .lm{color:var(--rd)}
-.rc{text-align:center;padding:24px}.rc .em{font-size:44px;margin-bottom:10px}.rc .tt{font-size:17px;font-weight:600;margin-bottom:4px}
-.rc .ds{font-size:13px;color:var(--td);margin-bottom:14px}
-.stats{display:flex;justify-content:center;gap:28px;margin-bottom:18px}
-.si{text-align:center}.sn{font-size:26px;font-weight:700}.sl{font-size:11px;color:var(--td);margin-top:1px}
-.sn.a{color:var(--ac)}.sn.g{color:var(--gn)}.sn.y{color:var(--yw)}
-.tw{overflow:hidden;border-radius:var(--r);box-shadow:0 1px 3px rgba(0,0,0,.04)}
-.th{padding:12px 16px;font-size:13px;font-weight:500;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;background:var(--s2)}
-.ts{overflow:auto;max-height:400px}.ts::-webkit-scrollbar{height:3px;width:3px}.ts::-webkit-scrollbar-thumb{background:var(--bd)}
-table{width:100%;border-collapse:collapse;font-size:11px}
-th{position:sticky;top:0;background:var(--s2);padding:8px 10px;text-align:left;font-weight:500;color:var(--td);white-space:nowrap;border-bottom:1px solid var(--bd);z-index:1}
-td{padding:6px 10px;border-bottom:1px solid var(--bd);max-width:220px;overflow:hidden;text-overflow:ellipsis}
-tr:hover td{background:rgba(201,100,66,.02)}
-.te{display:inline-block;padding:1px 7px;border-radius:9px;font-size:10px}
-.te.ex{background:rgba(58,140,110,.08);color:var(--gn)}.te.nw{background:rgba(196,138,42,.08);color:var(--yw)}.te.er{background:rgba(196,66,66,.08);color:var(--rd)}
-.note{background:rgba(201,100,66,.04);border:1px solid rgba(201,100,66,.12);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--td);margin-bottom:14px;line-height:1.6}
-.note b{color:var(--ac);font-weight:500}
-.err{background:rgba(196,66,66,.05);border:1px solid rgba(196,66,66,.15);border-radius:8px;padding:12px;color:var(--rd);font-size:12px;margin-bottom:12px}
-.prev{background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:14px;margin-bottom:14px}
-.prev-h{font-size:12px;font-weight:500;color:var(--ac);margin-bottom:8px}
-.prev-item{display:flex;justify-content:space-between;padding:4px 0;font-size:11px;border-bottom:1px solid rgba(224,216,204,.6)}
-.prev-item:last-child{border:0}
-.prev-item .pi-n{color:var(--t);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.prev-item .pi-c{color:var(--tm);margin-left:8px;flex-shrink:0}
-.spin{display:inline-block;width:14px;height:14px;border:2px solid rgba(201,100,66,.15);border-top-color:var(--ac);border-radius:50%;animation:sp .6s linear infinite;margin-right:6px;vertical-align:middle}
-@keyframes sp{to{transform:rotate(360deg)}}
-.fade{animation:fi .3s ease}@keyframes fi{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-.stags{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
-.stag{padding:2px 9px;border-radius:12px;font-size:11px;border:1px solid var(--bd);color:var(--td);cursor:pointer;transition:.2s;background:var(--s2)}
-.stag:hover{border-color:var(--ac);color:var(--ac)}.stag.on{border-color:var(--ac);background:rgba(201,100,66,.08);color:var(--ac)}
-</style>
-</head>
-<body>
-<div class="wrap">
-<h1>📚 教材知识点梳理工具</h1>
-<p class="sub">上传教材PDF → AI自动梳理知识点 → 与旧库去重比对 → 输出标准Excel</p>
-<div class="steps" id="stepBar"></div>
-<div id="content"></div>
-</div>
-<script>
-const S={step:0,files:{pdf:null,kb:null,ref:null},fp:{},cachedPaths:null,preset:"claude",
-apiUrl:"https://api.anthropic.com/v1/messages",
-apiKey:"",model:"claude-sonnet-4-6",subject:"",subjects:[],
-threshold:70,w_title:50,w_detail:40,w_k1:10,use_ai:true,parallel:4,period:"",grade:"",kbFilters:null,
-taskId:null,logs:[],result:null,error:null,polling:null,pdfPrev:null,prevLoading:false};
-
-const P={claude:{n:"Claude",u:"https://api.anthropic.com/v1/messages",m:"claude-sonnet-4-6"},
-tongyi:{n:"通义千问",u:"https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",m:"qwen-plus"},
-deepseek:{n:"DeepSeek",u:"https://api.deepseek.com/v1/chat/completions",m:"deepseek-chat"},
-doubao:{n:"豆包",u:"https://ark.cn-beijing.volces.com/api/v3/chat/completions",m:""},
-gemini:{n:"Gemini",u:"https://generativelanguage.googleapis.com/v1beta",m:"gemini-3-flash-preview"},
-openai:{n:"OpenAI",u:"https://api.openai.com/v1/chat/completions",m:"gpt-5.4"},
-zhipu:{n:"智谱AI",u:"https://open.bigmodel.cn/api/paas/v4/chat/completions",m:"glm-4-plus"},
-moonshot:{n:"Moonshot",u:"https://api.moonshot.cn/v1/chat/completions",m:"moonshot-v1-128k"},
-custom:{n:"自定义",u:"",m:""}};
-
-const ST=["上传文件","配置API","处理中","完成"];
-const E=s=>(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-
-function R(){
-  document.getElementById("stepBar").innerHTML=ST.map((s,i)=>{
-    const c=i<S.step?"st ok":i===S.step?"st on":"st";
-    return`<div class="${c}"><div class="dot">${i<S.step?"✓":i+1}</div><span>${s}</span></div>`;
-  }).join("");
-  const el=document.getElementById("content");
-  el.innerHTML=[r0,r1,r2,r3][S.step]();bindEv();
-}
-
-function r0(){
-  const f=(k,ic,lb,ht,ac,req)=>{const fi=S.files[k];
-    return`<div class="upz ${fi?"ok":""}" data-u="${k}"><div class="ic">${ic}</div><div class="lb">${lb}${req?"":"（可选）"}</div>
-    ${fi?`<div class="fn">✓ ${E(fi.name)} (${(fi.size/1024).toFixed(0)}KB)</div>`:`<div class="ht">${ht}</div>`}
-    <input type="file" accept="${ac}" style="display:none" data-f="${k}"></div>`;};
-  let pv="";
-  if(S.prevLoading)pv=`<div class="prev"><div class="prev-h"><span class="spin"></span>分析PDF中...</div></div>`;
-  else if(S.pdfPrev){const p=S.pdfPrev;
-    pv=`<div class="prev"><div class="prev-h">📄 PDF: ${p.total_pages}页 / ${p.total_chars.toLocaleString()}字 / ${p.chunks.length}个章节</div>
-    ${p.chunks.map(c=>`<div class="prev-item"><span class="pi-n">${E(c.info)}</span><span class="pi-c">${c.chars.toLocaleString()}字</span></div>`).join("")}</div>`;}
-  return`<div class="fade"><div class="upg">
-    ${f("pdf","📖","教材PDF","电子版 .pdf（必须）",".pdf",1)}
-    ${f("kb","🗄️","旧库表格","已有知识点库（必须）",".xlsx,.xls",1)}
-    ${f("ref","📋","参考表格","输出风格参考",".xlsx,.xls",0)}
-  </div>${pv}
-  <div class="note"><b>说明：</b>PDF需电子版（能复制文字）。旧库支持「九科知识卡详情」和「梳理样例」格式。参考表格可选。</div>
-  <div class="btns"><button class="btn bp" ${S.files.pdf&&S.files.kb?"":"disabled"} onclick="goStep(1)">下一步：配置API →</button></div></div>`;
-}
-
-function r1(){
-  const pb=Object.entries(P).map(([k,v])=>`<button class="pb ${S.preset===k?"on":""}" onclick="setPre('${k}')">${v.n}</button>`).join("");
-  const st=S.subjects.length?`<div class="stags">${S.subjects.map(([n,c])=>`<span class="stag ${S.subject===n?"on":""}" onclick="pickSubj('${n}')">${n} (${c.toLocaleString()})</span>`).join("")}</div>`:"";
-  return`<div class="fade"><div class="card"><div class="card-t">⚙️ 大模型API配置</div>
-  <div class="pre">${pb}</div>
-  <div class="fr f1"><div class="fg"><span class="fl">API地址</span><input class="fi" id="iU" value="${E(S.apiUrl)}" placeholder="https://..."></div></div>
-  <div class="fr"><div class="fg"><span class="fl">API Key</span><input class="fi" id="iK" type="password" value="${E(S.apiKey)}" placeholder="sk-..."></div>
-  <div class="fg"><span class="fl">模型名称</span><input class="fi" id="iM" value="${E(S.model)}" placeholder="如 qwen-plus"></div></div>
-  <div class="fr"><div class="fg"><span class="fl">教材学科</span><input class="fi" id="iS" value="${E(S.subject)}" placeholder="如：地理">${st}</div>
-  <div class="fg"><span class="fl">&nbsp;</span><span style="font-size:11px;color:var(--tm);padding:9px 0">点击标签选择或手动输入</span></div></div>
-  ${S.kbFilters?`<div style="margin-top:6px"><span class="fl" style="display:block;margin-bottom:4px">旧库筛选（缩小比对范围，更快更准）</span>
-  <div class="fr">
-    <div class="fg"><span class="fl">学段</span><select class="fi" id="fPd"><option value="">全部</option>${(S.kbFilters.periods||[]).map(([v,c])=>'<option value="'+E(v)+'"'+(S.period===v?' selected':'')+'>'+E(v)+' ('+c+')</option>').join("")}</select></div>
-    <div class="fg"><span class="fl">年级</span><select class="fi" id="fGr"><option value="">全部</option>${(S.kbFilters.grades||[]).map(([v,c])=>'<option value="'+E(v)+'"'+(S.grade===v?' selected':'')+'>'+E(v)+' ('+c+')</option>').join("")}</select></div>
-  </div></div>`:""}</div>
-  <div class="card"><div class="card-t">🔗 旧库匹配参数</div>
-  <div class="fr">
-    <div class="fg"><span class="fl">匹配阈值: <b id="vTh">${S.threshold}%</b>（越高越严格，越不容易匹配错）</span>
-      <input type="range" min="40" max="95" value="${S.threshold}" id="iTh" oninput="document.getElementById('vTh').textContent=this.value+'%'" style="width:100%;accent-color:var(--ac)"></div>
-    <div class="fg"><span class="fl">AI二轮比对</span>
-      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--td);padding:8px 0;cursor:pointer">
-        <input type="checkbox" id="iAi" ${S.use_ai?"checked":""} style="accent-color:var(--ac)"> 代码未匹配的交给AI再判一轮
-      </label></div>
-  </div>
-  <div class="fr">
-    <div class="fg"><span class="fl">并行处理数: <b id="vPl">${S.parallel}</b>（同时处理几个章节，越大越快但API可能限流）</span>
-      <input type="range" min="1" max="8" value="${S.parallel}" id="iPl" oninput="document.getElementById('vPl').textContent=this.value" style="width:100%;accent-color:var(--ac)"></div>
-    <div class="fg"></div>
-  </div>
-  <details style="margin-top:6px"><summary style="cursor:pointer;font-size:11px;color:var(--tm)">高级：调整权重</summary>
-  <div style="font-size:11px;color:var(--tm);padding:8px 0 4px">每个滑杆对应一个比对字段，权重越高该字段越重要</div>
-  <div class="fr" style="margin-top:4px">
-    <div class="fg"><span class="fl">二级标题匹配: <b id="vWt">${S.w_title}%</b></span>
-      <input type="range" min="20" max="80" value="${S.w_title}" id="iWt" oninput="document.getElementById('vWt').textContent=this.value+'%'" style="width:100%;accent-color:var(--ac)">
-      <span style="font-size:10px;color:var(--tm)">新教材二级标题 vs 旧库二级标题</span></div>
-    <div class="fg"><span class="fl">二级详情匹配: <b id="vWd">${S.w_detail}%</b></span>
-      <input type="range" min="10" max="60" value="${S.w_detail}" id="iWd" oninput="document.getElementById('vWd').textContent=this.value+'%'" style="width:100%;accent-color:var(--ac)">
-      <span style="font-size:10px;color:var(--tm)">新教材详情前80字 vs 旧库详情前150字</span></div>
-  </div>
-  <div class="fr">
-    <div class="fg"><span class="fl">一级知识点匹配: <b id="vW1">${S.w_k1}%</b></span>
-      <input type="range" min="0" max="30" value="${S.w_k1}" id="iW1" oninput="document.getElementById('vW1').textContent=this.value+'%'" style="width:100%;accent-color:var(--ac)">
-      <span style="font-size:10px;color:var(--tm)">新教材一级名称 vs 旧库一级名称</span></div>
-    <div class="fg"></div>
-  </div>
-  </details></div>
-  <div class="note"><b>推荐：</b>豆包 seed2.0-lite（便宜好用）、Claude claude-sonnet-4-6、OpenAI gpt-5.4、Gemini gemini-3-flash-preview<br><b>豆包：</b>模型名填你的接入点ID（如 ep-xxxx...），推荐创建 seed2.0-lite 的接入点<br><b>安全：</b>API Key仅本机使用。</div>
-  ${S.error?`<div class="err">${E(S.error)}</div>`:""}
-  <div class="btns"><button class="btn bs" onclick="goStep(0)">← 上一步</button><button class="btn bp" onclick="go()">🚀 开始处理</button></div></div>`;
-}
-
-function r2(){
-  let pct=Math.min(95,S.logs.length*3.5);
-  if(S.logs.some(l=>l.msg.includes("第六步")))pct=95;
-  else if(S.logs.some(l=>l.msg.includes("第五步")))pct=80;
-  else if(S.logs.some(l=>l.msg.includes("第四步")))pct=30;
-  const lg=S.logs.map(l=>`<div class="le ${l.type}"><span class="lt">${l.time}</span><span class="lm">${E(l.msg)}</span></div>`).join("");
-  return`<div class="fade"><div class="card"><div class="pbar"><div class="pfill" style="width:${pct}%"></div></div>
-  <div class="ptxt">${S.error?"⚠️ 出错":'<span class="spin"></span>处理中...'}</div></div>
-  ${S.error?`<div class="err">❌ ${E(S.error)}</div>`:""}<div class="logs" id="lb">${lg}</div>
-  ${S.error?`<div class="btns"><button class="btn bs" onclick="goStep(1)">← 返回修改API</button><button class="btn bp" onclick="go()">🔄 重新处理</button></div>`:""}</div>`;
-}
-
-function r3(){
-  if(!S.result)return"";const r=S.result;
-  const lg=S.logs.map(l=>`<div class="le ${l.type}"><span class="lt">${l.time}</span><span class="lm">${E(l.msg)}</span></div>`).join("");
-  const rows=(r.results||[]).slice(0,150).map(w=>{
-    const rm=w["备注"]||"";
-    const tg=rm.includes("已存在")?'<span class="te ex">已存在</span>':rm.includes("失败")?'<span class="te er">失败</span>':'<span class="te nw">需新增</span>';
-    const d=w["二级知识点详情"]||"";
-    return`<tr><td title="${E(w["章"]||"")}">${E((w["章"]||""))}</td><td>${E(w["节"]||"")}</td>
-    <td>${E(w["一级知识点"]||"")}</td><td style="font-family:monospace;font-size:10px">${E(w["一级知识点id"]||"-")}</td>
-    <td>${E(w["二级知识点标题"]||"")}</td><td title="${E(d)}">${E(d.substring(0,80))}${d.length>80?"...":""}</td><td>${tg}</td></tr>`;
-  }).join("");
-  return`<div class="fade"><div class="card rc"><div class="em">✅</div><div class="tt">梳理完成！</div>
-  <div class="ds">${E(r.filename)}</div>
-  <div class="stats"><div class="si"><div class="sn a">${r.total}</div><div class="sl">总数</div></div>
-  <div class="si"><div class="sn g">${r.exist}</div><div class="sl">已存在</div></div>
-  <div class="si"><div class="sn y">${r.total-r.exist}</div><div class="sl">需新增</div></div></div>
-  <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
-  <a class="btn bg" href="/api/download/${encodeURIComponent(r.filename)}" style="text-decoration:none">📥 下载Excel</a>
-  <button class="btn bs" onclick="reset()">🔄 下一本</button></div>
-  <div style="font-size:11px;color:var(--tm);text-align:center;margin-top:8px">提示：处理下一本前，建议先将新增知识点入库，再导出最新旧库上传</div></div>
-  <div class="card tw"><div class="th"><span>预览</span><span style="font-size:11px;color:var(--tm)">共${r.total}条${r.total>150?"（前150）":""}</span></div>
-  <div class="ts"><table><thead><tr><th>章</th><th>节</th><th>一级知识点</th><th>ID</th><th>二级标题</th><th>二级详情</th><th>备注</th></tr></thead>
-  <tbody>${rows}</tbody></table></div></div>
-  <details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;color:var(--td)">查看日志</summary>
-  <div class="logs" style="margin-top:8px">${lg}</div></details></div>`;
-}
-
-function bindEv(){document.querySelectorAll("[data-u]").forEach(el=>{
-  const k=el.dataset.u,inp=el.querySelector("input[type=file]");
-  el.onclick=e=>{if(e.target!==inp)inp.click()};
-  inp.onchange=()=>{if(inp.files[0]){S.files[k]=inp.files[0];if(k==="pdf")upPdf();if(k==="kb")upKb();R()}}
-})}
-
-async function upFile(file,field){
-  const fd=new FormData();fd.append(field,file);
-  const r=await fetch("/api/upload",{method:"POST",body:fd});
-  const d=await r.json();
-  if(d.files&&d.files[field]){S.fp[field]=d.files[field].path;return d.files[field].path}return null;
-}
-async function upPdf(){S.prevLoading=true;S.pdfPrev=null;R();
-  try{const p=await upFile(S.files.pdf,"pdf");if(!p)return;
-    const r=await fetch("/api/preview-pdf",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pdf_path:p})});
-    S.pdfPrev=await r.json();}catch(e){console.error(e)}S.prevLoading=false;R();}
-async function upKb(){try{const p=await upFile(S.files.kb,"kb");if(!p)return;
-    const r=await fetch("/api/detect-subjects",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({kb_path:p})});
-    const d=await r.json();
-    if(d.subjects){S.subjects=d.subjects;if(!S.subject&&d.subjects.length)S.subject=d.subjects[0][0]}
-    if(d.filters)S.kbFilters=d.filters;
-  }catch(e){console.error(e)}}
-
-function goStep(n){S.step=n;S.error=null;R()}
-function setPre(k){S.preset=k;if(k!=="custom"){S.apiUrl=P[k].u;S.model=P[k].m}R()}
-function pickSubj(n){S.subject=n;const el=document.getElementById("iS");if(el)el.value=n;R()}
-
-function rf(){const g=id=>document.getElementById(id);
-  if(g("iU"))S.apiUrl=g("iU").value.trim();if(g("iK"))S.apiKey=g("iK").value.trim();
-  if(g("iM"))S.model=g("iM").value.trim();if(g("iS"))S.subject=g("iS").value.trim();
-  if(g("iTh"))S.threshold=parseInt(g("iTh").value);
-  if(g("iWt"))S.w_title=parseInt(g("iWt").value);
-  if(g("iWd"))S.w_detail=parseInt(g("iWd").value);
-  if(g("iW1"))S.w_k1=parseInt(g("iW1").value);
-  if(g("iAi"))S.use_ai=g("iAi").checked;
-  if(g("iPl"))S.parallel=parseInt(g("iPl").value);
-  if(g("fPd"))S.period=g("fPd").value;
-  if(g("fGr"))S.grade=g("fGr").value;}
-
-async function go(){rf();
-  if(!S.apiUrl||!S.apiKey||!S.model){S.error="请填写完整API配置";R();return}
-  if(!S.subject){S.error="请填写教材学科";R();return}
-  S.step=2;S.logs=[];S.error=null;S.result=null;R();
-  try{
-    // Reuse cached paths if available (retry scenario)
-    let pp=S.cachedPaths?.pp, kp=S.cachedPaths?.kp, rp=S.cachedPaths?.rp||"";
-    if(!pp||!kp){
-      const fd=new FormData();fd.append("pdf",S.files.pdf);fd.append("kb",S.files.kb);
-      if(S.files.ref)fd.append("ref",S.files.ref);
-      const ur=await(await fetch("/api/upload",{method:"POST",body:fd})).json();
-      pp=ur.files?.pdf?.path;kp=ur.files?.kb?.path;rp=ur.files?.ref?.path||"";
-      if(!pp||!kp)throw new Error("上传失败");
-      S.cachedPaths={pp,kp,rp};
-    }
-    const sr=await(await fetch("/api/start",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({pdf_path:pp,kb_path:kp,ref_path:rp,subject:S.subject,api_url:S.apiUrl,api_key:S.apiKey,model:S.model,
-        threshold:S.threshold,w_title:S.w_title,w_detail:S.w_detail,w_k1:S.w_k1,use_ai:S.use_ai,parallel:S.parallel,
-        period:S.period,grade:S.grade})})).json();
-    if(sr.error)throw new Error(sr.error);S.taskId=sr.task_id;
-    S.polling=setInterval(async()=>{try{const d=await(await fetch(`/api/task/${S.taskId}`)).json();
-      S.logs=d.logs||[];R();const lb=document.getElementById("lb");if(lb)lb.scrollTop=lb.scrollHeight;
-      if(d.status==="done"){clearInterval(S.polling);S.result=d.result;S.step=3;R()}
-      else if(d.status==="error"){clearInterval(S.polling);S.error="处理失败，查看日志";R()}}catch(e){}},1500);
-  }catch(e){S.error=e.message;R()}}
-
-function reset(){if(S.polling)clearInterval(S.polling);
-  Object.assign(S,{step:0,files:{pdf:null,kb:null,ref:null},fp:{},cachedPaths:null,
-    threshold:70,w_title:50,w_detail:40,w_k1:10,use_ai:true,parallel:4,period:"",grade:"",kbFilters:null,
-    taskId:null,logs:[],result:null,error:null,pdfPrev:null,subjects:[]});R()}
-R();
-</script>
-</body>
-</html>'''
 
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
