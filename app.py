@@ -127,6 +127,7 @@ def extract_pdf_text(pdf_path):
 # ============================================================
 def _match_toc_entry(line, prefix_pattern):
     """匹配目录行，同时支持省略号格式（第X章 标题…3）和空格格式（第X章 标题 3）
+    以及PDF渲染artifact中用!作分隔符的格式（第 15 章 ! 分式!1）
     返回 (prefix, title, page) 或 None"""
     m = re.search(rf"({prefix_pattern})\s*(.+?)…+\s*(\d+)", line)
     if m:
@@ -134,6 +135,12 @@ def _match_toc_entry(line, prefix_pattern):
     m = re.search(rf"^({prefix_pattern})\s+(.+?)\s+(\d+)$", line)
     if m:
         return m.group(1), m.group(2).strip(), int(m.group(3))
+    # 兼容PDF提取artifact：! 作为分隔符，如"第 15 章 ! 分式!1"
+    m = re.search(rf"^({prefix_pattern})[!\s]+(.+?)[!\s]+(\d+)[!\s]*$", line)
+    if m:
+        title = re.sub(r'[!]+', ' ', m.group(2)).strip()
+        if title:
+            return m.group(1), title, int(m.group(3))
     return None
 
 
@@ -147,8 +154,8 @@ def parse_toc_entries(pages_dict):
             for next_p in range(pnum + 1, pnum + 4):
                 if next_p in pages_dict:
                     next_text = pages_dict[next_p]
-                    # 支持有省略号或无省略号的目录格式
-                    if re.search(r"(…+\s*\d+|第[一二三四五六七八九十百]+[章节]\s+.+?\s+\d+)", next_text):
+                    # 支持有省略号/空格格式、阿拉伯数字章节（第 15 章）以及小数节号（15"1 或 15.1）
+                    if re.search(r"(…+\s*\d+|第[一二三四五六七八九十百]+[章节]\s+.+?\s+\d+|第\s*\d+\s*[章节]|\d+[\"\.]\d+)", next_text):
                         toc_pages_text += next_text + "\n"
                     else:
                         break
@@ -231,6 +238,35 @@ def parse_toc_entries(pages_dict):
             current_chapter = f"{prefix} {title}"
             entries.append({"type": "chapter", "chapter": current_chapter, "section": "", "title": title, "page": page})
             continue
+
+        # 阿拉伯数字章标题（如"第 15 章 分式"）
+        m = _match_toc_entry(line, r"第\s*\d+\s*章")
+        if m:
+            prefix, title, page = m
+            prefix_clean = re.sub(r'\s+', '', prefix)  # "第15章"
+            # 清理PDF artifact字符：% → 、，! → 空格
+            title_clean = re.sub(r'%', '、', title)
+            title_clean = re.sub(r'[!]+', ' ', title_clean).strip()
+            title_clean = re.sub(r'、\s+', '、', title_clean)  # 清理顿号后多余空格
+            current_chapter = f"{prefix_clean} {title_clean}"
+            entries.append({"type": "chapter", "chapter": current_chapter, "section": "", "title": title_clean, "page": page})
+            continue
+
+        # 小数点节号（数学/理科教材）：支持"15.1 标题 2"和PDF artifact"15"1! 标题!2"
+        # 也跳过纯数字小节（如"1"分式"2"）只取X.Y格式的主节
+        m = re.search(r'^(\d{2,}["\.](\d+))[!\s]+(.{2,40}?)[!\s]+(\d+)[!\s]*$', line)
+        if not m:
+            m = re.search(r'^(\d{2,}\.(\d+))\s+(.{2,40}?)\s+(\d+)$', line)
+        if m and current_chapter:
+            raw_sec = m.group(1).replace('"', '.')  # 15"1 → 15.1
+            sub_idx = int(m.group(2))
+            title = re.sub(r'[!%]+', ' ', m.group(3)).strip()
+            page = int(m.group(4))
+            # 只保留顶层小节（15.1, 15.2...），跳过子子节（内嵌的 1., 2. 等单数字）
+            if title and len(title) >= 2 and len(raw_sec) >= 4:
+                entries.append({"type": "section", "chapter": current_chapter,
+                                "section": f"{raw_sec} {title}", "title": title, "page": page})
+                continue
 
         # 单元标题
         m = _match_toc_entry(line, r"第[一二三四五六七八九十百]+单元")
@@ -365,13 +401,15 @@ def split_pages_by_regex(pages_dict):
             continue
 
         # 匹配多种章节格式
-        ch = re.search(r"(第[一二三四五六七八九十百]+章)\s+(.+?)(?:\n|$)", text)
+        ch = re.search(r"(第[一二三四五六七八九十百]+章|第\s*\d+\s*章)\s+(.+?)(?:\n|$)", text)
         simple_ch = re.search(r"^([一二三四五六七八九十]+)[、\s]+(.{2,30}?)(?:\n|$)", text, re.MULTILINE)
         sec = re.search(r"(第[一二三四五六七八九十百]+节)\s*(.+?)(?:\n|$)", text)
         lesson = re.search(r"(第\s*\d+\s*课)\s*(.+?)(?:\n|$)", text)
         unit = re.search(r"(第[一二三四五六七八九十百]+单元)\s+(.+?)(?:\n|$)", text)
+        # 小数点节号（数学/理科教材，如"15.1 分式及其基本性质"），出现在行首
+        decimal_sec = re.search(r"^(?:\S+\n)?(\d+\.\d+)\s+([^\n]{2,40})(?:\n|$)", text)
 
-        if sec or lesson:
+        if sec or lesson or decimal_sec:
             if current_text.strip():
                 chunks.append({
                     "chapter": current_chapter,
@@ -381,13 +419,18 @@ def split_pages_by_regex(pages_dict):
                     "text": current_text
                 })
             if ch:
-                current_chapter = f"{ch.group(1)} {ch.group(2).strip()}"
+                ch_prefix = re.sub(r'\s+', '', ch.group(1))  # 统一去空格：第15章
+                current_chapter = f"{ch_prefix} {ch.group(2).strip()}"
             elif unit:
                 current_chapter = f"{unit.group(1)} {unit.group(2).strip()}"
             elif simple_ch:
                 current_chapter = f"{simple_ch.group(1)} {simple_ch.group(2).strip()}"
-            m = sec or lesson
-            current_section = f"{m.group(1).replace(' ','')} {m.group(2).strip()}"
+            if sec or lesson:
+                m = sec or lesson
+                current_section = f"{m.group(1).replace(' ','')} {m.group(2).strip()}"
+            else:
+                # decimal_sec
+                current_section = f"{decimal_sec.group(1)} {decimal_sec.group(2).strip()}"
             current_text = text
         elif ch or unit or simple_ch:
             if current_text.strip():
@@ -401,6 +444,9 @@ def split_pages_by_regex(pages_dict):
             m = ch or unit or simple_ch
             if simple_ch:
                 current_chapter = f"{simple_ch.group(1)} {simple_ch.group(2).strip()}"
+            elif ch:
+                ch_prefix = re.sub(r'\s+', '', ch.group(1))
+                current_chapter = f"{ch_prefix} {ch.group(2).strip()}"
             else:
                 current_chapter = f"{m.group(1)} {m.group(2).strip()}"
             current_section = ""
@@ -818,9 +864,10 @@ def ai_semantic_match(unmatched_points, old_kb_records, api_config, log_fn):
             log_fn(f"  批次 {i//batch_size+1}: {len(batch)}条 → AI匹配{ai_match}条")
 
         except Exception as e:
-            log_fn(f"  ⚠️ 批次 {i//batch_size+1} 失败: {str(e)[:80]}", "error")
+            err_msg = str(e)[:120]
+            log_fn(f"  ⚠️ 批次 {i//batch_size+1} 失败: {err_msg}", "error")
             for point in batch:
-                results.append(_make_result(point, "需新增（AI比对失败）"))
+                results.append(_make_result(point, f"需新增（AI比对失败：{err_msg}）"))
 
     ai_exist = sum(1 for r in results if "已存在" in r.get("备注", ""))
     log_fn(f"✅ 第二轮完成：AI匹配 {ai_exist} 条，需新增 {len(results)-ai_exist} 条", "success")
